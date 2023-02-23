@@ -104,7 +104,7 @@ docker -H ${host_docker_sock} run -d -it --name neartest_Kubernetes_hashsubix -v
 
 当然上述大部分配置都会被多租户集群下的 Kubernetes Security Policy 所拦截，且如果目前主机上的 HIDS 有一定容器安全能力的话，这类配置的容器创建行为也比较容易会被标记为异常行为。
 
-不过，显然我们在真实的对抗中如果只是想达到执行 strace 抓取 sshd 的目的，配置可以更加简化一点，只需添加 SYS_PTRACE 的 capabilities 即可，我在演习中也正是这么做的。
+不过，显然我们在真实的对抗中如果只是想达到执行 strace 抓取 sshd 的目的，配置可以更加简化一点，只需添加 SYS_PTRACE 的 capabilities 即可，如果需要抓取容器外的进程，可再添加一个 hostpid 。
 
 因为具有 SYS_PTRACE 权限的容器并且进行 kubectl exec 的行为在实际的研发运维流程中非常常见，是 HIDS 比较不容易察觉的类业务型操作；另外也可以寻找节点上已有该配置的容器和 POD 进行控制，同样是不易被防御团队所察觉的。
 
@@ -142,7 +142,7 @@ capsh --print
 
 env | grep KUBE
 
-ls -l /run/secrets/Kubernetes.io/
+ls -l /run/secrets/kubernetes.io/
 
 mount
 
@@ -163,7 +163,7 @@ cat /proc/1/mountinfo
 
 ![图片](https://mmbiz.qpic.cn/mmbiz_png/JMH1pEQ7qP5lIovB8NLL2Anic3icVltSftPaEEMDapm7RgLEpRRPibpPezFWy7K4D44qhOs2UgdRENTicibzaCicFC2g/640?wx_fmt=png)
 
-其中 capsh --print 获取到信息是十分重要的，可以打印出当前容器里已有的 Capabilities 权限；历史上，我们曾经为了使用 strace 分析业务进程，而先设法进行容器逃逸忘记看当前容器的 Capabilities 其实已经拥有了 ptrace 权限，绕了一个大弯子。
+其中 capsh --print 获取到信息是十分重要的，可以打印出当前容器里已有的 Capabilities 权限。
 
 ![图片](https://mmbiz.qpic.cn/mmbiz_png/JMH1pEQ7qP5lIovB8NLL2Anic3icVltSftcgCLWayVj5MuKrHtibFOsoIsWrDc7Onr5cTbzIPXpafkq2hjnAv16Jg/640?wx_fmt=png)
 
@@ -244,9 +244,7 @@ cat /proc/1/mountinfo
 
 7. remount and rewrite cgroup
 
-8. create ptrace cap container  
-
-9. websocket/sock shell + volumeMounts: /path
+8. websocket/sock shell + volumeMounts: /path
 
 我们来一一看一下利用场景和方法：  
 
@@ -441,11 +439,13 @@ e. 当然不能忘记给 exp.sh 赋予可执行权限。
 
 ### 5.5. SYS_PTRACE 安全风险
 
-当 docker 容器设置 --cap-add=SYS_PTRACE 或 Kubernetes PODS 设置 securityContext.capabilities 为 SYS_PTRACE 配置等把 SYS_PTRACE capabilities 权限赋予容器的情况，都可能导致容器逃逸。
+当 docker 容器设置 --cap-add=SYS_PTRACE 或 Kubernetes PODS 设置 securityContext.capabilities 为 SYS_PTRACE 配置等把 SYS_PTRACE capabilities 权限赋予容器的情况，如果该容器也具备 hostpid 配置，那就可能导致容器逃逸。
+
+可导致容器逃逸风险的 capabilities 权限还有很多，这里就不一一介绍啦。
 
 ![图片](https://mmbiz.qpic.cn/mmbiz_png/JMH1pEQ7qP5lIovB8NLL2Anic3icVltSftiatm1LG35dC04AKvK7vbmJibx5iciaena0ptqib9W2xOY9cVTVShyFmBMFQ/640?wx_fmt=png)
 
-这个场景很常见，因为无论是不是线上环境，业务进行灾难重试和程序调试都是没办法避免的，所以容器经常被设置 ptrace 权限。
+这个场景很常见，因为无论是不是线上环境，业务进行故障重试和程序调试都是没办法避免的，所以容器经常被设置 ptrace 权限。
 
 使用 capsh --print 可以判断当前容器是否附加了 ptrace capabilities。
 
@@ -664,7 +664,7 @@ curl -LO "https://dl.Kubernetes.io/release/$(curl -L -s https://dl.Kubernetes.io
 
 至于如何通过 apiserver 进行持续渗透和控制，参考 kubectl 的官方文档是最好的：
 
-https://Kubernetes.io/docs/reference/generated/kubectl/kubectl-commands
+https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands
 
 ### 7.3. kubelet
 
@@ -682,7 +682,7 @@ https://Kubernetes.io/docs/reference/generated/kubectl/kubectl-commands
 
 之后再通过
 
-curl -k https://Kubernetes-node-ip:10250/run/// -d “cmd=id” 的方式在任意容器里执行命令
+curl -k https://kubernetes-node-ip:10250/run/// -d “cmd=id” 的方式在任意容器里执行命令
 
 ![图片](https://mmbiz.qpic.cn/mmbiz_png/JMH1pEQ7qP5lIovB8NLL2Anic3icVltSftzyicibzfCRmZZVmRdbO0Aibn7LI4132GPk73g7pwkqepME7ekBaZEw7tQ/640?wx_fmt=png)
 
@@ -736,7 +736,7 @@ dashboard 是 Kubernetes 官方推出的控制 Kubernetes 的图形化界面，�
 
 etcd 被广泛用于存储分布式系统或机器集群数据，其默认监听了 2379 等端口，如果 2379 端口暴露到公网，可能造成敏感信息泄露，本文我们主要讨论 Kubernetes 由于配置错误导致 etcd 未授权访问的情况。Kubernetes 默认使用了 etcd v3 来存储数据，如果我们能够控制 Kubernetes etcd 服务，也就拥有了整个集群的控制权。
 
-在 Kubernetes 中用户可以通过配置 / etc/Kubernetes/manifests/etcd.yaml 更改 etcd pod 相关的配置，倘若管理员通过修改配置将 etcd 监听的 host 修改为 0.0.0.0，则通过 ectd 获取 Kubernetes 的认证鉴权 token 用于控制集群就是自然而然的思路了，方式如下：
+在 Kubernetes 中用户可以通过配置 /etc/kubernetes/manifests/etcd.yaml 更改 etcd pod 相关的配置，倘若管理员通过修改配置将 etcd 监听的 host 修改为 0.0.0.0，则通过 ectd 获取 Kubernetes 的认证鉴权 token 用于控制集群就是自然而然的思路了，方式如下：
 
 首先读取用于访问 apiserver 的 token
 
@@ -1007,7 +1007,7 @@ APISIX 提供了 REST Admin API 功能，用户可以使用 REST Admin API 来�
 
 官方文档
 
-https://Kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/ 里也谈及了 CronJob 和 CronTab 的对比， 这个技术也确实可以和 CronTab 一样一定程度上可以满足持久化的场景。
+https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/ 里也谈及了 CronJob 和 CronTab 的对比， 这个技术也确实可以和 CronTab 一样一定程度上可以满足持久化的场景。
 
 这里有一个我们预研时使用的  CronJob 配置：
 
@@ -1035,14 +1035,14 @@ https://Kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/ 里也谈�
 4.  https://www.cncf.io/blog/2017/04/26/service-mesh-critical-component-cloud-native-stack/
 5.  https://github.com/lxc/lxcfs
 6.  https://github.com/cdr/code-server
-7.  https://Kubernetes.io/docs/reference/generated/kubectl/kubectl-commands
+7.  https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands
 8.  https://thehackernews.com/2021/01/new-docker-container-escape-bug-affects.html
-9.  https://medium.com/jorgeacetozi/Kubernetes-master-components-etcd-api-server-controller-manager-and-scheduler-3a0179fc8186
+9.  https://medium.com/jorgeacetozi/kubernetes-master-components-etcd-api-server-controller-manager-and-scheduler-3a0179fc8186
 10.  https://wohin.me/rong-qi-tao-yi-gong-fang-xi-lie-yi-tao-yi-ji-zhu-gai-lan/#4-2-procfs-
 11.  https://security.tencent.com/index.php/announcement/msg/193
 12.  https://www.freebuf.com/vuls/196993.html
-13.  https://Kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/
-14.  https://Kubernetes.io/zh/docs/reference/command-line-tools-reference/kubelet/
+13.  https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/
+14.  https://kubernetes.io/zh/docs/reference/command-line-tools-reference/kubelet/
 15.  https://www.cdxy.me/?p=827
 16.  https://medium.com/jorgeacetozi/kubernetes-master-components-etcd-api-server-controller-manager-and-scheduler-3a0179fc8186
 17.  https://github.com/neargle/CVE-2018-6574-POC
